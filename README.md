@@ -19,7 +19,7 @@ Keep useful content in its original order. A shorter video is an outcome of remo
 ## First prototype
 
 1. Open a YouTube watch page and the extension's side panel.
-2. Check or edit the subject, then start an analysis.
+2. Check or edit the subject, prefilled with the video title and description (up to 1,000 characters), then start an analysis.
 3. The local helper retrieves a timestamped transcript and asks Jev focused questions about each passage, with neighboring context.
 4. Inspect proposed removal markers, transcript excerpts, and separate relevance and promotion scores.
 5. Adjust the marking threshold without repeating the Jev calls, or explicitly keep individual passages.

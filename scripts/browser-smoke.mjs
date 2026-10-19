@@ -110,6 +110,9 @@ try {
   await worker.evaluate(async () => {
     await chrome.storage.local.set({ 'jev:settings': { threshold: 0.9, promotions: true, tangents: true } });
   });
+  await worker.evaluate(async ({ id, title }) => {
+    await chrome.storage.local.set({ [`jev:${id}:subject`]: title });
+  }, { id: videoId, title: analysis.title });
   const youtube = await context.newPage();
   await youtube.goto(`https://www.youtube.com/watch?v=${videoId}`);
   await youtube.waitForFunction(() => document.querySelector('video').duration === 551
@@ -134,6 +137,23 @@ try {
 
   // Panel interaction selectors below intentionally use the visible accessible UI.
   await panel.getByRole('button', { name: /^Analyze/ }).waitFor({ state: 'visible' });
+  const subject = panel.getByRole('textbox', { name: 'Video subject', exact: true });
+  const description = 'Synthetic fixture for testing the extension.';
+  const defaultSubject = `${analysis.title}\n\n${description}`;
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
+  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'Updated description.'; });
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
+    `${analysis.title}\n\nUpdated description.`);
+  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'x'.repeat(2000); });
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
+    `${analysis.title}\n\n${'x'.repeat(2000)}`.slice(0, 1000));
+  await youtube.evaluate(text => { document.querySelector('#description-inline-expander').textContent = text; }, description);
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
+  await subject.fill('Custom tutorial focus');
+  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'Description after editing.'; });
+  // Wait for metadata polling to observe the new description before checking the edit.
+  await panel.waitForTimeout(2200);
+  assert.equal(await subject.inputValue(), 'Custom tutorial focus', 'metadata updates preserve manual subject edits');
   await panel.getByRole('button', { name: /^Analyze/ }).click();
   await panel.waitForFunction(() => document.body.textContent.includes('Analyzing'), null, { timeout: 5000 }).catch(async error => {
     console.error('Analysis start debug:', JSON.stringify(requests), await panel.locator('body').innerText());
@@ -141,16 +161,20 @@ try {
   });
   assert.equal(requests.length, 1, 'one explicit analysis request');
   assert.equal(requests[0].video_id, videoId);
+  assert.equal(requests[0].subject, 'Custom tutorial focus', 'edited subject reaches the helper');
+  assert.equal(requests[0].description, 'Description after editing.', 'fresh description reaches the helper');
   assert.ok(requests[0].transcript?.length, 'visible YouTube transcript reaches helper');
   assert.ok(requests[0].transcript.every(cue => cue.duration > 0 && cue.duration <= 120), 'DOM cue timestamps satisfy helper contract');
-  await panel.waitForFunction(async key => Boolean((await chrome.storage.local.get(key))[key]),
-    `jev:${videoId}:job`, { polling: 100 });
+  await panel.getByRole('status').getByText(/1 \/ 4 passages/).waitFor();
+  const savedJob = await worker.evaluate(async key => (await chrome.storage.local.get(key))[key], `jev:${videoId}:job`);
+  assert.equal(savedJob?.id, 'offline-fixture-job', 'in-progress job is saved before reopening');
 
   // Reloading a panel must resume the saved job rather than issue another paid analysis.
   await panel.reload();
   await youtube.bringToFront();
   const previousPolls = jobPolls;
   await panel.waitForFunction(() => document.body.textContent.includes('Analyzing'), null, { polling: 100 });
+  assert.equal(await subject.inputValue(), 'Custom tutorial focus', 'custom subject survives reopening the panel');
   releaseJob = true;
   await panel.getByText('Synthetic promotion with no useful information.', { exact: true }).waitFor();
   assert.ok(jobPolls > previousPolls, 'reopened panel polls persisted job');
@@ -237,7 +261,7 @@ try {
   await youtube.waitForFunction(() => !document.querySelector('#jev-highlight-markers'));
   assert.deepEqual(await youtube.evaluate(() => window.fixtureSeeks), explicitSeeks, 'SPA navigation never seeks');
   assert.deepEqual(failures, [], 'no page errors or external requests');
-  console.log('PASS: unpacked extension, caption contract, job resume, settings migration, 80% promotion preservation, advanced sliders, persistence, compact UI, threshold, keep, SPA cleanup, and zero automatic seeks (offline fixtures; panel-document surrogate).');
+  console.log('PASS: unpacked extension, title and description subject defaults, late metadata, subject limit and edits, caption contract, job resume, settings migration, 80% promotion preservation, advanced sliders, persistence, compact UI, threshold, keep, SPA cleanup, and zero automatic seeks (offline fixtures; panel-document surrogate).');
   console.log('Screenshots: /tmp/jev-sidepanel-advanced-offline-smoke.png, /tmp/jev-sidepanel-offline-smoke.png, and /tmp/jev-timeline-offline-smoke.png');
 } finally {
   await context?.close();
