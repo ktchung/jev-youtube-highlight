@@ -239,7 +239,7 @@ function App() {
     {isPreview && <div className="demo-banner">UI PREVIEW · Illustrative scores, no Jev analysis</div>}
     <header className="topbar">
       <div className="brand"><Logo /><span className="wordmark">jev<span className="wordmark-dot">.</span></span></div>
-      <span className="mode-pill"><span className="mode-dot" />Mark only</span>
+      <span className="mode-pill"><span className="mode-dot" />{settings.autoSkip ? 'Auto skip on' : 'Mark only'}</span>
     </header>
 
     <main>
@@ -262,9 +262,11 @@ function App() {
           <ThresholdSlider id="confidence" label="Confidence to mark" value={settings.threshold} min={50} onChange={threshold => updateSettings({ threshold })} />
           <div className="slider-endpoints"><span>More candidates</span><span>More certain</span></div>
           <div className="category-options">
+            <label className="toggle-row"><span>Auto skip flagged sections</span><input type="checkbox" role="switch" checked={settings.autoSkip} aria-describedby="auto-skip-hint" onChange={event => updateSettings({ autoSkip: event.target.checked })} /><span className="switch" aria-hidden="true" /></label>
             <label className="toggle-row"><span><i className="legend-dot promotion" />Promotions</span><input type="checkbox" role="switch" checked={settings.promotions} onChange={event => updateSettings({ promotions: event.target.checked })} /><span className="switch" aria-hidden="true" /></label>
             <label className="toggle-row"><span><i className="legend-dot tangent" />Tangents</span><input type="checkbox" role="switch" checked={settings.tangents} onChange={event => updateSettings({ tangents: event.target.checked })} /><span className="switch" aria-hidden="true" /></label>
           </div>
+          <p id="auto-skip-hint" className="field-hint">Skip marked passages during playback. Keep prevents a passage from being skipped.</p>
           <button className="advanced-button" aria-expanded={showAdvanced} aria-controls="advanced-settings" onClick={() => setShowAdvanced(!showAdvanced)}>Advanced <span aria-hidden="true">{showAdvanced ? '−' : '+'}</span></button>
           <div id="advanced-settings" className="advanced-settings" hidden={!showAdvanced}>
             <p className="field-hint">Higher values require stronger evidence to keep a passage.</p>

@@ -1,5 +1,5 @@
 import { readMetadata, videoIdFromUrl } from './content-core';
-import { markedRanges } from './policy';
+import { markedRanges, skipTarget, type MarkedRange } from './policy';
 import { getStored } from './storage';
 import { normalizeSettings, SETTINGS_KEY, videoKey, type Analysis } from './types';
 
@@ -10,14 +10,29 @@ let lastVideoId: string | null = null;
 let refreshQueued = false;
 let disposed = false;
 let navigating = false;
+let playback: { videoId: string; ranges: MarkedRange[]; protectedRanges: { start: number; end: number }[] } | null = null;
+
+function autoSkip(event?: Event) {
+  if (!playback || disposed || navigating || !chrome.runtime.id
+    || playback.videoId !== videoIdFromUrl(location.href)) return;
+  const renderedVideoId = document.querySelector('ytd-watch-flexy')?.getAttribute('video-id');
+  if (renderedVideoId && renderedVideoId !== playback.videoId) return;
+  const player = document.querySelector('#movie_player');
+  const video = player?.querySelector('video');
+  if (!video || (event && event.target !== video) || video.paused || video.seeking || video.ended
+    || video.readyState < 2 || player?.classList.contains('ad-showing')
+    || player?.classList.contains('ad-interrupting')) return;
+  const target = skipTarget(playback.ranges, video.currentTime, video.duration, playback.protectedRanges);
+  if (target !== null) video.currentTime = target;
+}
 
 function removeMarkers() { document.getElementById(ROOT_ID)?.remove(); }
 
 async function refresh() {
   const current = ++generation;
   const videoId = videoIdFromUrl(location.href);
-  if (lastVideoId !== videoId) { removeMarkers(); lastVideoId = videoId; }
-  if (!videoId || disposed || navigating) { removeMarkers(); return; }
+  if (lastVideoId !== videoId) { playback = null; removeMarkers(); lastVideoId = videoId; }
+  if (!videoId || disposed || navigating) { playback = null; removeMarkers(); return; }
   const [analysis, storedSettings, kept] = await Promise.all([
     getStored<Analysis | null>(videoKey(videoId, 'analysis'), null),
     getStored<unknown>(SETTINGS_KEY, null),
@@ -26,13 +41,18 @@ async function refresh() {
   const settings = normalizeSettings(storedSettings);
   if (current !== generation || disposed || navigating || videoId !== videoIdFromUrl(location.href)) return;
   const renderedVideoId = document.querySelector('ytd-watch-flexy')?.getAttribute('video-id');
-  if (renderedVideoId && renderedVideoId !== videoId) { removeMarkers(); return; }
+  if (renderedVideoId && renderedVideoId !== videoId) { playback = null; removeMarkers(); return; }
   const player = document.querySelector('#movie_player');
-  const video = document.querySelector('video');
+  const video = player?.querySelector('video');
   const progress = player?.querySelector('.ytp-progress-bar-container');
-  if (!analysis || analysis.video_id !== videoId || !video || !progress || !Number.isFinite(video.duration)
-    || video.duration <= 0 || player?.classList.contains('ad-showing')) { removeMarkers(); return; }
+  if (!analysis || analysis.video_id !== videoId) { playback = null; removeMarkers(); return; }
   const ranges = markedRanges(analysis.segments, settings, kept);
+  playback = settings.autoSkip ? {
+    videoId, ranges, protectedRanges: analysis.segments.filter(segment => kept.includes(segment.id)),
+  } : null;
+  autoSkip();
+  if (!video || !progress || !Number.isFinite(video.duration) || video.duration <= 0
+    || player?.classList.contains('ad-showing')) { removeMarkers(); return; }
   const signature = `${videoId}:${video.duration}:${JSON.stringify(ranges)}`;
   const existing = document.getElementById(ROOT_ID);
   if (existing?.dataset.signature === signature && existing.parentElement === progress) return;
@@ -77,14 +97,22 @@ const observer = new MutationObserver(records => {
   queueRefresh();
 });
 observer.observe(document.documentElement, { childList: true, subtree: true });
-function navigationStart() { navigating = true; generation++; removeMarkers(); }
+function navigationStart() { navigating = true; generation++; playback = null; removeMarkers(); }
 function navigationFinish() { navigating = false; queueRefresh(); }
+function storageChanged() {
+  // Stop using old settings/Keep choices before the debounced storage read.
+  playback = null;
+  generation++;
+  queueRefresh();
+}
 document.addEventListener('yt-navigate-start', navigationStart);
 document.addEventListener('yt-navigate-finish', navigationFinish);
 document.addEventListener('fullscreenchange', queueRefresh);
 document.addEventListener('loadedmetadata', queueRefresh, true);
 let interval = window.setInterval(queueRefresh, 2000);
-chrome.storage.onChanged.addListener(queueRefresh);
+chrome.storage.onChanged.addListener(storageChanged);
+document.addEventListener('timeupdate', autoSkip, true);
+document.addEventListener('playing', autoSkip, true);
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === 'JEV_GET_VIDEO') { respond(navigating ? null : readMetadata()); return; }
@@ -92,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     const video = document.querySelector('video');
     if (video && !document.querySelector('#movie_player')?.classList.contains('ad-showing')
       && typeof message.time === 'number' && Number.isFinite(message.time) && message.time >= 0) {
-      // This is the only playback mutation, requested by clicking a timestamp in the panel.
+      // Explicit timestamp navigation also works while auto skip is disabled.
       video.currentTime = Math.min(message.time, Number.isFinite(video.duration) ? video.duration : message.time);
       respond({ ok: true });
     } else respond({ ok: false });
@@ -101,10 +129,13 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 
 window.addEventListener('pagehide', () => {
   disposed = true;
+  playback = null;
   generation++;
   observer.disconnect();
   window.clearInterval(interval);
-  chrome.storage.onChanged.removeListener(queueRefresh);
+  chrome.storage.onChanged.removeListener(storageChanged);
+  document.removeEventListener('timeupdate', autoSkip, true);
+  document.removeEventListener('playing', autoSkip, true);
   document.removeEventListener('yt-navigate-start', navigationStart);
   document.removeEventListener('yt-navigate-finish', navigationFinish);
   document.removeEventListener('fullscreenchange', queueRefresh);
@@ -117,7 +148,9 @@ window.addEventListener('pageshow', event => {
   disposed = false;
   navigating = false;
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  chrome.storage.onChanged.addListener(queueRefresh);
+  chrome.storage.onChanged.addListener(storageChanged);
+  document.addEventListener('timeupdate', autoSkip, true);
+  document.addEventListener('playing', autoSkip, true);
   document.addEventListener('yt-navigate-start', navigationStart);
   document.addEventListener('yt-navigate-finish', navigationFinish);
   document.addEventListener('fullscreenchange', queueRefresh);

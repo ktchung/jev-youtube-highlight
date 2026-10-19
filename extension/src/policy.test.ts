@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markedRanges, shouldMark, timestamp, totalDuration } from './policy';
+import { markedRanges, shouldMark, skipTarget, timestamp, totalDuration } from './policy';
 import { DEFAULT_SETTINGS, normalizeSettings, type Segment } from './types';
 
 const promotion: Segment = { id: 'a', start: 248, end: 274, text: 'promotion', relevance: 0.1, promotion: 0.98, context_needed: 0.1, tangent: 0.05 };
@@ -56,6 +56,11 @@ describe('conservative mark policy', () => {
 });
 
 describe('saved settings migration', () => {
+  it('defaults auto skip off and only accepts a saved boolean', () => {
+    expect(normalizeSettings({ autoSkip: true }).autoSkip).toBe(true);
+    expect(normalizeSettings({ autoSkip: 'true' }).autoSkip).toBe(false);
+    expect(normalizeSettings({ threshold: 0.95 }).autoSkip).toBe(false);
+  });
   it('adds preservation defaults while keeping existing marking preferences', () => {
     expect(normalizeSettings({ threshold: 0.95, promotions: false, tangents: true })).toEqual({
       ...DEFAULT_SETTINGS, threshold: 0.95, promotions: false,
@@ -72,5 +77,32 @@ describe('saved settings migration', () => {
       ...DEFAULT_SETTINGS, threshold: 1, promotionUsefulnessThreshold: 0.65,
       usefulnessThreshold: 0, tangents: false,
     });
+  });
+});
+
+describe('automatic skip destination', () => {
+  const ranges = [{ start: 10, end: 20 }, { start: 20, end: 30 }, { start: 25, end: 35 }, { start: 40, end: 50 }];
+
+  it('skips connected marked intervals without jumping over useful gaps', () => {
+    expect(skipTarget([...ranges].reverse(), 10, 100)).toBe(35);
+    expect(skipTarget(ranges, 29, 100)).toBe(35);
+    expect(skipTarget(ranges, 35, 100)).toBeNull();
+    expect(skipTarget(ranges, 39.99, 100)).toBeNull();
+    expect(skipTarget(ranges, 40, 100)).toBe(50);
+  });
+
+  it('respects duration and rejects unavailable media timing', () => {
+    expect(skipTarget(ranges, 10, 15)).toBe(15);
+    for (const duration of [0, 10, NaN, Infinity]) expect(skipTarget(ranges, 10, duration)).toBeNull();
+    for (const time of [-1, NaN, Infinity]) expect(skipTarget(ranges, time, 100)).toBeNull();
+  });
+
+  it('never skips into or across a manually kept interval', () => {
+    const kept = [{ start: 15, end: 25 }];
+    expect(skipTarget(ranges, 10, 100, kept)).toBe(15);
+    expect(skipTarget(ranges, 15, 100, kept)).toBeNull();
+    expect(skipTarget(ranges, 24.99, 100, kept)).toBeNull();
+    expect(skipTarget(ranges, 25, 100, kept)).toBe(35);
+    expect(skipTarget(markedRanges([promotion], DEFAULT_SETTINGS, [promotion.id]), 250, 551)).toBeNull();
   });
 });

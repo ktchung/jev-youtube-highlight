@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Jev · YouTube Highlights",
   "version": "0.1.0",
-  "description": "Mark promotional and unrelated passages on YouTube with Jev. Playback stays in your hands.",
+  "description": "Mark promotional and unrelated passages on YouTube with Jev, with optional auto skipping and Keep overrides.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel"],
   "host_permissions": ["https://www.youtube.com/*", "https://m.youtube.com/*", "http://127.0.0.1/*"],

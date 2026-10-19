@@ -44,6 +44,24 @@ export function totalDuration(ranges: Pick<MarkedRange, 'start' | 'end'>[]): num
   return duration;
 }
 
+// Merge connected marks so playback needs only one seek. A manual Keep also
+// protects its time span if an overlapping marked passage would cross it.
+export function skipTarget(ranges: Pick<MarkedRange, 'start' | 'end'>[], time: number, duration: number,
+  protectedRanges: Pick<MarkedRange, 'start' | 'end'>[] = []): number | null {
+  if (!Number.isFinite(time) || !Number.isFinite(duration) || time < 0 || duration <= time
+    || protectedRanges.some(range => range.start <= time && time < range.end)) return null;
+  let end = time;
+  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+    if (range.start > end) break;
+    if (range.end > end) end = range.end;
+  }
+  for (const range of protectedRanges) {
+    if (range.start > time) end = Math.min(end, range.start);
+  }
+  end = Math.min(end, duration);
+  return end > time ? end : null;
+}
+
 export function timestamp(seconds: number): string {
   const value = Math.max(0, Math.floor(seconds));
   const hours = Math.floor(value / 3600);

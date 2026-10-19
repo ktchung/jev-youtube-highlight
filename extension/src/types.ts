@@ -57,6 +57,7 @@ export interface Health {
 }
 
 export interface Settings {
+  autoSkip: boolean;
   threshold: number;
   promotions: boolean;
   tangents: boolean;
@@ -66,6 +67,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  autoSkip: false,
   threshold: 0.9,
   promotions: true,
   tangents: true,
@@ -79,13 +81,14 @@ export const DEFAULT_SETTINGS: Settings = {
 export function normalizeSettings(value: unknown): Settings {
   const stored = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  type ThresholdKey = Exclude<keyof Settings, 'promotions' | 'tangents'>;
+  type ThresholdKey = Exclude<keyof Settings, 'autoSkip' | 'promotions' | 'tangents'>;
   const probability = (key: ThresholdKey, minimum = 0): number => {
     const candidate = stored[key];
     return typeof candidate === 'number' && Number.isFinite(candidate)
       ? Math.max(minimum, Math.min(1, candidate)) : DEFAULT_SETTINGS[key];
   };
   return {
+    autoSkip: typeof stored.autoSkip === 'boolean' ? stored.autoSkip : DEFAULT_SETTINGS.autoSkip,
     threshold: probability('threshold', 0.5),
     promotions: typeof stored.promotions === 'boolean' ? stored.promotions : DEFAULT_SETTINGS.promotions,
     tangents: typeof stored.tangents === 'boolean' ? stored.tangents : DEFAULT_SETTINGS.tangents,
