@@ -1,0 +1,28 @@
+# Local credentials and cached viewing data
+.env
+.env.*
+!.env.example
+.data/
+.cache/
+data/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Extension builds and browser profiles
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+*.log
