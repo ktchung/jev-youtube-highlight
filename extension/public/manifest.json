@@ -11,6 +11,11 @@
   "side_panel": { "default_path": "sidepanel.html" },
   "content_scripts": [{
     "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+    "js": ["page.js"],
+    "world": "MAIN",
+    "run_at": "document_start"
+  }, {
+    "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
     "js": ["content.js"],
     "run_at": "document_idle"
   }]

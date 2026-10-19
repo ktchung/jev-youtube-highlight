@@ -4,11 +4,15 @@ import { api, ApiError } from './api';
 import { markCategory, markedRanges, removalScore, shouldMark, timestamp, totalDuration, usefulnessThresholdFor } from './policy';
 import { previewAnalysis, previewVideo } from './preview';
 import { getStored, removeStored, setStored } from './storage';
-import { DEFAULT_SETTINGS, normalizeSettings, SETTINGS_KEY, videoKey, type Analysis, type Health, type Job, type Settings, type VideoMetadata } from './types';
+import { DEFAULT_SETTINGS, normalizeSettings, SETTINGS_KEY, SUBJECT_MAX_LENGTH, videoKey, type Analysis, type Health, type Job, type Settings, type VideoMetadata } from './types';
 import './styles.css';
 
 const isPreview = import.meta.env.DEV && new URLSearchParams(location.search).get('preview') === '1';
 const hasChrome = typeof chrome !== 'undefined' && Boolean(chrome.tabs);
+
+function defaultVideoSubject(video: VideoMetadata | null): string {
+  return [video?.title.trim(), video?.description.trim()].filter(Boolean).join('\n\n').slice(0, SUBJECT_MAX_LENGTH);
+}
 
 function Logo() {
   return <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M9 7v13a5 5 0 0 0 10 0V7M24 7v9" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/><path d="M5 12h8M15 12h8" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>;
@@ -74,6 +78,7 @@ function App() {
         if (!alive || requestId !== latestRequest) return;
         setTabId(tab.id);
         setVideo(previous => previous?.video_id === metadata?.video_id && previous?.title === metadata?.title
+          && previous?.description === metadata?.description
           && previous?.duration === metadata?.duration ? previous : metadata);
         if (metadata) setTabError('');
       } catch { if (alive) setTabError('Could not read this tab. Open a YouTube watch page and try again.'); }
@@ -88,9 +93,15 @@ function App() {
     if (isPreview) return;
     setAnalysis(null); setKept([]); setJob(null); setError(''); setStarting(false); setShowAll(false);
     subjectEdited.current = false;
-    setSubject(video?.title ?? '');
+    setSubject(defaultVideoSubject(video));
     if (!video) return;
     const videoId = video.video_id;
+    const restoreSubject = (saved: string) => {
+      if (subjectEdited.current) return;
+      // Upgrade the old title-only default while retaining custom subjects.
+      subjectEdited.current = saved !== video.title && saved !== defaultVideoSubject(video);
+      if (subjectEdited.current) setSubject(saved);
+    };
     let alive = true;
     setLoadingCache(true);
     void (async () => {
@@ -103,17 +114,17 @@ function App() {
         ]);
         if (!alive) return;
         setKept(savedKept);
-        if (savedSubject) { subjectEdited.current = true; setSubject(savedSubject); }
+        if (savedSubject) restoreSubject(savedSubject);
         if (savedAnalysis?.video_id === videoId) {
           setAnalysis(savedAnalysis);
-          if (!savedSubject) { subjectEdited.current = true; setSubject(savedAnalysis.subject); }
+          if (!savedSubject) restoreSubject(savedAnalysis.subject);
         }
         if (savedJob?.video_id === videoId && !['complete', 'failed'].includes(savedJob.status)) setJob(savedJob);
         try {
           const cached = await api.cached(videoId);
           if (alive && cached.video_id === videoId) {
             setAnalysis(cached);
-            if (!savedSubject && !subjectEdited.current) { subjectEdited.current = true; setSubject(cached.subject); }
+            if (!savedSubject && !subjectEdited.current) restoreSubject(cached.subject);
             await setStored(videoKey(videoId, 'analysis'), cached);
           }
         } catch (cause) {
@@ -127,9 +138,9 @@ function App() {
   }, [video?.video_id]);
 
   useEffect(() => {
-    // YouTube can render the new title after changing the watch URL.
-    if (!isPreview && video?.title && !subjectEdited.current) setSubject(video.title);
-  }, [video?.video_id, video?.title]);
+    // YouTube can render the title and description after changing the watch URL.
+    if (!isPreview && video && !subjectEdited.current) setSubject(defaultVideoSubject(video));
+  }, [video?.video_id, video?.title, video?.description]);
 
   async function acceptJob(next: Job) {
     if (next.video_id !== videoRef.current) return;
@@ -246,7 +257,8 @@ function App() {
         <section className="settings-section">
           <div className="section-heading"><h2>Settings</h2></div>
           <label className="field-label" htmlFor="subject">Video subject</label>
-          <textarea id="subject" rows={2} value={subject} maxLength={1000} onChange={event => { subjectEdited.current = true; setSubject(event.target.value); }} placeholder="What is this video about?" />
+          <textarea id="subject" rows={4} value={subject} maxLength={SUBJECT_MAX_LENGTH} aria-describedby="subject-hint" onChange={event => { subjectEdited.current = true; setSubject(event.target.value); }} placeholder="What is this video about?" />
+          <p id="subject-hint" className="field-hint">Starts with the video title and full description. Edit to focus the analysis.</p>
           <ThresholdSlider id="confidence" label="Confidence to mark" value={settings.threshold} min={50} onChange={threshold => updateSettings({ threshold })} />
           <div className="slider-endpoints"><span>More candidates</span><span>More certain</span></div>
           <div className="category-options">

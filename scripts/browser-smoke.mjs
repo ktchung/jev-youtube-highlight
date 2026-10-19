@@ -15,6 +15,7 @@ const extensionPath = path.join(root, 'extension/dist');
 const profile = await mkdtemp(path.join(tmpdir(), 'jev-browser-smoke-'));
 const videoId = 'MgvwZaDPCs4';
 const secondVideoId = 'AbCdEfGhI12';
+const fixtureDescription = `Full creator description.\n\n${'Useful tutorial details. '.repeat(80)}\nhttps://example.com/original-link`;
 // Tiny seekable H.264 fixture: black 16x16 frames with a real duration of 551s.
 // Native media properties are shared with Chrome's isolated content-script world;
 // overriding video.duration in the page world would not exercise the extension.
@@ -37,12 +38,12 @@ const html = `<!doctype html><html><head><title>[OFFLINE FIXTURE] Synthetic tuto
 <style>body{font-family:system-ui;background:#121212;color:#eee;margin:40px}#movie_player{position:relative;width:900px;height:420px;background:#242424}.ytp-progress-bar-container{position:absolute;bottom:0;width:100%;height:6px;background:#666}video{width:100%;height:100%}</style>
 </head><body><h2>Offline browser integration fixture — no real video or Jev requests</h2>
 <ytd-watch-metadata><h1><yt-formatted-string>[OFFLINE FIXTURE] Synthetic tutorial</yt-formatted-string></h1></ytd-watch-metadata>
-<div id="description-inline-expander">Synthetic fixture for testing the extension.</div>
+<div id="description-inline-expander"><div id="expanded"><yt-attributed-string></yt-attributed-string></div><div id="snippet"><yt-attributed-string id="attributed-snippet-text">Full creator description...</yt-attributed-string><button>...more</button></div><button id="expand">...more</button><section hidden>Subtitles and auto-dubbing<br>Show transcript<br>Channel name<br>Video details</section><button hidden>Show less</button></div>
 <div id="movie_player"><video src="/__fixture.mp4" preload="auto"></video><div class="ytp-progress-bar-container"></div></div>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">0:00</span><span class="segment-text">Useful tutorial introduction.</span></ytd-transcript-segment-renderer>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">4:08</span><span class="segment-text">Synthetic promotion with no useful information.</span></ytd-transcript-segment-renderer>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">4:34</span><span class="segment-text">Useful explanation inside a synthetic promotion.</span></ytd-transcript-segment-renderer>
-<script>window.fixtureSeeks=[];document.querySelector('video').addEventListener('seeking',()=>window.fixtureSeeks.push(document.querySelector('video').currentTime));</script>
+<script>window.ytInitialPlayerResponse=${JSON.stringify({ videoDetails: { videoId, shortDescription: fixtureDescription } })};document.querySelector('#movie_player').getPlayerResponse=()=>window.ytInitialPlayerResponse;window.fixtureSeeks=[];document.querySelector('video').addEventListener('seeking',()=>window.fixtureSeeks.push(document.querySelector('video').currentTime));</script>
 </body></html>`;
 
 let context;
@@ -110,6 +111,9 @@ try {
   await worker.evaluate(async () => {
     await chrome.storage.local.set({ 'jev:settings': { threshold: 0.9, promotions: true, tangents: true } });
   });
+  await worker.evaluate(async ({ id, title }) => {
+    await chrome.storage.local.set({ [`jev:${id}:subject`]: title });
+  }, { id: videoId, title: analysis.title });
   const youtube = await context.newPage();
   await youtube.goto(`https://www.youtube.com/watch?v=${videoId}`);
   await youtube.waitForFunction(() => document.querySelector('video').duration === 551
@@ -134,6 +138,24 @@ try {
 
   // Panel interaction selectors below intentionally use the visible accessible UI.
   await panel.getByRole('button', { name: /^Analyze/ }).waitFor({ state: 'visible' });
+  const subject = panel.getByRole('textbox', { name: 'Video subject', exact: true });
+  const description = fixtureDescription;
+  const defaultSubject = `${analysis.title}\n\n${description}`;
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
+  await youtube.evaluate(() => { window.ytInitialPlayerResponse.videoDetails.shortDescription = 'Updated description.'; });
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
+    `${analysis.title}\n\nUpdated description.`);
+  await youtube.evaluate(() => { window.ytInitialPlayerResponse.videoDetails.shortDescription = 'x'.repeat(2000); });
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
+    `${analysis.title}\n\n${'x'.repeat(2000)}`);
+  await youtube.evaluate(text => { window.ytInitialPlayerResponse.videoDetails.shortDescription = text; }, description);
+  await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
+  await subject.fill('Custom tutorial focus');
+  const freshDescription = `Description after editing.\n\n${'Full text. '.repeat(150)}\nhttps://example.com/end`;
+  await youtube.evaluate(text => { window.ytInitialPlayerResponse.videoDetails.shortDescription = text; }, freshDescription);
+  // Wait for metadata polling to observe the new description before checking the edit.
+  await panel.waitForTimeout(2200);
+  assert.equal(await subject.inputValue(), 'Custom tutorial focus', 'metadata updates preserve manual subject edits');
   await panel.getByRole('button', { name: /^Analyze/ }).click();
   await panel.waitForFunction(() => document.body.textContent.includes('Analyzing'), null, { timeout: 5000 }).catch(async error => {
     console.error('Analysis start debug:', JSON.stringify(requests), await panel.locator('body').innerText());
@@ -141,16 +163,20 @@ try {
   });
   assert.equal(requests.length, 1, 'one explicit analysis request');
   assert.equal(requests[0].video_id, videoId);
+  assert.equal(requests[0].subject, 'Custom tutorial focus', 'edited subject reaches the helper');
+  assert.equal(requests[0].description, freshDescription, 'full fresh description reaches the helper');
   assert.ok(requests[0].transcript?.length, 'visible YouTube transcript reaches helper');
   assert.ok(requests[0].transcript.every(cue => cue.duration > 0 && cue.duration <= 120), 'DOM cue timestamps satisfy helper contract');
-  await panel.waitForFunction(async key => Boolean((await chrome.storage.local.get(key))[key]),
-    `jev:${videoId}:job`, { polling: 100 });
+  await panel.getByRole('status').getByText(/1 \/ 4 passages/).waitFor();
+  const savedJob = await worker.evaluate(async key => (await chrome.storage.local.get(key))[key], `jev:${videoId}:job`);
+  assert.equal(savedJob?.id, 'offline-fixture-job', 'in-progress job is saved before reopening');
 
   // Reloading a panel must resume the saved job rather than issue another paid analysis.
   await panel.reload();
   await youtube.bringToFront();
   const previousPolls = jobPolls;
   await panel.waitForFunction(() => document.body.textContent.includes('Analyzing'), null, { polling: 100 });
+  assert.equal(await subject.inputValue(), 'Custom tutorial focus', 'custom subject survives reopening the panel');
   releaseJob = true;
   await panel.getByText('Synthetic promotion with no useful information.', { exact: true }).waitFor();
   assert.ok(jobPolls > previousPolls, 'reopened panel polls persisted job');
@@ -237,7 +263,7 @@ try {
   await youtube.waitForFunction(() => !document.querySelector('#jev-highlight-markers'));
   assert.deepEqual(await youtube.evaluate(() => window.fixtureSeeks), explicitSeeks, 'SPA navigation never seeks');
   assert.deepEqual(failures, [], 'no page errors or external requests');
-  console.log('PASS: unpacked extension, caption contract, job resume, settings migration, 80% promotion preservation, advanced sliders, persistence, compact UI, threshold, keep, SPA cleanup, and zero automatic seeks (offline fixtures; panel-document surrogate).');
+  console.log('PASS: unpacked extension, title and description subject defaults, late metadata, subject limit and edits, caption contract, job resume, settings migration, 80% promotion preservation, advanced sliders, persistence, compact UI, threshold, keep, SPA cleanup, and zero automatic seeks (offline fixtures; panel-document surrogate).');
   console.log('Screenshots: /tmp/jev-sidepanel-advanced-offline-smoke.png, /tmp/jev-sidepanel-offline-smoke.png, and /tmp/jev-timeline-offline-smoke.png');
 } finally {
   await context?.close();
