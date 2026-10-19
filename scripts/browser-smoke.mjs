@@ -2,11 +2,12 @@
 // Run after building the extension: node scripts/browser-smoke.mjs
 // PLAYWRIGHT_MODULE can point to an already-installed playwright package.
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { reloadExtension } from './reload-extension.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(root, 'extension/package.json'));
@@ -48,6 +49,10 @@ const html = `<!doctype html><html><head><title>[OFFLINE FIXTURE] Synthetic tuto
 
 let context;
 try {
+  // Reloading an unpacked extension requires Developer mode, even when the
+  // initial load was permitted through Chromium's command-line flags.
+  await mkdir(path.join(profile, 'Default'));
+  await writeFile(path.join(profile, 'Default/Preferences'), JSON.stringify({ extensions: { ui: { developer_mode: true } } }));
   context = await chromium.launchPersistentContext(profile, {
     executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
     channel: 'chromium', headless: true,
@@ -138,6 +143,8 @@ try {
 
   // Panel interaction selectors below intentionally use the visible accessible UI.
   await panel.getByRole('button', { name: /^Analyze/ }).waitFor({ state: 'visible' });
+  const autoSkip = panel.getByRole('switch', { name: 'Auto skip flagged sections', exact: true });
+  assert.equal(await autoSkip.isChecked(), false, 'old installs default to mark only');
   const subject = panel.getByRole('textbox', { name: 'Video subject', exact: true });
   const description = fixtureDescription;
   const defaultSubject = `${analysis.title}\n\n${description}`;
@@ -254,6 +261,76 @@ try {
       }), await panel.getByRole('alert').allTextContents());
       throw error;
     });
+  async function position(time) {
+    await youtube.evaluate(async time => {
+      const video = document.querySelector('video');
+      video.pause();
+      video.muted = true;
+      if (video.currentTime === time && !video.seeking) return;
+      const settled = new Promise(resolve => video.addEventListener('seeked', resolve, { once: true }));
+      video.currentTime = time;
+      await settled;
+    }, time);
+  }
+  async function play() { await youtube.evaluate(() => document.querySelector('video').play()); }
+  async function assertStaysIn(start, end, message) {
+    const before = await youtube.evaluate(() => window.fixtureSeeks.length);
+    await play();
+    // Observe real playback across multiple native timeupdate events.
+    await youtube.waitForFunction(start => document.querySelector('video').currentTime > start + 0.7, start);
+    assert.ok(await youtube.evaluate(end => document.querySelector('video').currentTime < end, end), message);
+    assert.equal(await youtube.evaluate(() => window.fixtureSeeks.length), before, message);
+    await youtube.evaluate(() => document.querySelector('video').pause());
+  }
+
+  await autoSkip.check();
+  await panel.waitForFunction(async () => (await chrome.storage.local.get('jev:settings'))['jev:settings'].autoSkip === true);
+  await panel.reload();
+  await promotion.getByRole('button', { name: 'Undo keep', exact: true }).waitFor();
+  assert.equal(await autoSkip.isChecked(), true, 'auto skip persists across panel reloads');
+  await position(248);
+  await assertStaysIn(248, 274, 'Keep prevents skipping with auto skip enabled after reload');
+
+  // Undo Keep makes the same cached passage eligible again, including mid-playback.
+  await play();
+  await promotion.getByRole('button', { name: 'Undo keep', exact: true }).click();
+  await youtube.waitForFunction(() => document.querySelector('video').currentTime >= 274);
+  assert.ok(await youtube.evaluate(() => document.querySelector('video').currentTime < 290), 'lands in useful content');
+
+  await position(247.8);
+  await play();
+  await youtube.waitForFunction(() => document.querySelector('video').currentTime >= 274);
+  await position(350);
+  await play();
+  await youtube.waitForFunction(() => document.querySelector('video').currentTime >= 365);
+
+  await position(250);
+  const pausedSeeks = await youtube.evaluate(() => window.fixtureSeeks.length);
+  await youtube.evaluate(() => document.querySelector('video').dispatchEvent(new Event('timeupdate')));
+  assert.equal(await youtube.evaluate(() => document.querySelector('video').currentTime), 250, 'paused review does not auto skip');
+  assert.equal(await youtube.evaluate(() => window.fixtureSeeks.length), pausedSeeks);
+
+  await youtube.evaluate(() => document.querySelector('#movie_player').classList.add('ad-showing'));
+  await assertStaysIn(250, 274, 'ads are never automatically skipped');
+  await youtube.evaluate(() => document.querySelector('#movie_player').classList.remove('ad-showing'));
+
+  await slider.fill('99');
+  await youtube.waitForFunction(() => !document.querySelector('#jev-highlight-markers'));
+  await position(350);
+  await assertStaysIn(350, 365, 'threshold changes immediately update skip eligibility');
+  await slider.fill('80');
+  await youtube.waitForFunction(() => document.querySelectorAll('#jev-highlight-markers span').length === 2);
+
+  await autoSkip.uncheck();
+  await panel.waitForFunction(async () => (await chrome.storage.local.get('jev:settings'))['jev:settings'].autoSkip === false);
+  await position(250);
+  await assertStaysIn(250, 274, 'turning auto skip off restores uninterrupted playback');
+
+  // Leave skipping enabled to verify stale marks cannot affect the next video.
+  await autoSkip.check();
+  await youtube.evaluate(() => document.dispatchEvent(new Event('yt-navigate-start')));
+  await position(250);
+  await assertStaysIn(250, 274, 'navigation start stops skipping immediately');
   const explicitSeeks = await youtube.evaluate(() => [...window.fixtureSeeks]);
 
   await youtube.evaluate(id => {
@@ -263,7 +340,23 @@ try {
   await youtube.waitForFunction(() => !document.querySelector('#jev-highlight-markers'));
   assert.deepEqual(await youtube.evaluate(() => window.fixtureSeeks), explicitSeeks, 'SPA navigation never seeks');
   assert.deepEqual(failures, [], 'no page errors or external requests');
-  console.log('PASS: unpacked extension, title and description subject defaults, late metadata, subject limit and edits, caption contract, job resume, settings migration, 80% promotion preservation, advanced sliders, persistence, compact UI, threshold, keep, SPA cleanup, and zero automatic seeks (offline fixtures; panel-document surrogate).');
+  await position(250);
+  await assertStaysIn(250, 274, 'previous video marks never skip a new video');
+  assert.equal(requests.length, 1, 'auto skip and Keep reuse cached analysis');
+  const savedSettings = await panel.evaluate(async () => (await chrome.storage.local.get('jev:settings'))['jev:settings']);
+  await reloadExtension(context, extensionPath, { refreshTabs: false });
+  // Chromium closes extension documents during reload; open a fresh panel tab.
+  const reloadedPanel = await context.newPage();
+  await reloadedPanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  assert.deepEqual(await reloadedPanel.evaluate(async () => (await chrome.storage.local.get('jev:settings'))['jev:settings']), savedSettings,
+    'automated extension reload preserves settings');
+  await youtube.goto(`https://www.youtube.com/watch?v=${videoId}`);
+  await youtube.waitForFunction(() => document.querySelector('video').readyState >= 2);
+  await position(250);
+  await play();
+  await youtube.waitForFunction(() => document.querySelector('video').currentTime >= 274);
+  assert.deepEqual(failures, [], 'automated reload reconnects content scripts without page errors');
+  console.log('PASS: unpacked Chromium extension, subject metadata, captions, job resume, settings migration, advanced sliders, persistence, compact UI, auto skip of promotions and tangents, Keep/Undo keep, paused review, ads, toggle off, thresholds, and SPA cleanup (offline fixtures; panel-document surrogate).');
   console.log('Screenshots: /tmp/jev-sidepanel-advanced-offline-smoke.png, /tmp/jev-sidepanel-offline-smoke.png, and /tmp/jev-timeline-offline-smoke.png');
 } finally {
   await context?.close();

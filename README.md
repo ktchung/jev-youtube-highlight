@@ -2,9 +2,9 @@
 
 A local companion for watching YouTube tutorials, product reviews, and tech or AI news with fewer interruptions. Jev evaluates timestamped passages so an extension can identify self-promotion, sponsorships, and unrelated tangents while preserving useful explanations.
 
-The first prototype is **mark-only**: it highlights proposed removals on YouTube's existing timeline and lets you inspect them in a side panel. It does not automatically skip, trim, export, or re-encode the video.
+The extension highlights proposed removals on YouTube's existing timeline and lets you inspect them in a side panel. Turn on **Auto skip flagged sections** to skip marked passages during playback. The toggle defaults to off, and **Keep** always prevents a passage from being skipped. It does not trim, export, or re-encode the video.
 
-> Status: the first implementation is a transcript-based, mark-only prototype. Visual analysis and automatic skipping are future work.
+> Status: transcript-based analysis, timeline markers, and optional automatic skipping are implemented. Visual analysis is future work.
 
 ## Goal
 
@@ -24,7 +24,9 @@ Keep useful content in its original order. A shorter video is an outcome of remo
 4. Inspect proposed removal markers, transcript excerpts, and separate relevance and promotion scores.
 5. Adjust the marking threshold without repeating the Jev calls, or explicitly keep individual passages.
 
-Playback remains under your control. Clicking a passage may seek to it, but the extension will not seek automatically.
+6. Optionally enable **Auto skip flagged sections**. It uses the same thresholds and categories as the timeline markers and works with saved analyses. **Keep** excludes a passage; **Undo keep** makes it eligible again. The toggle and Keep choices are saved locally.
+
+With auto skip off, playback remains unchanged unless you click a passage timestamp. With it on, marked passages skip while the video is playing; paused review and YouTube ads are left alone. Threshold and category changes update skipping without repeating the analysis.
 
 The panel should distinguish live Jev results from any explicitly labeled demonstration data, show analysis progress, and report actual token usage with an estimated API cost.
 
@@ -114,6 +116,18 @@ make browser-check
 
 The optional visual preview is available through `npm --prefix extension run dev`, then `/sidepanel.html?preview=1` on the printed server address (normally `http://127.0.0.1:5173/sidepanel.html?preview=1`). It is explicitly labeled demonstration data and does not call Jev. Real extension usage defaults to the live helper.
 
+To rebuild and reload the unpacked extension in an already running **Chromium** session:
+
+```sh
+npm --prefix extension run build:reload
+```
+
+Enable remote debugging in Chromium at `chrome://inspect/#remote-debugging` and accept Chromium's native connection prompt when requested. The command reads `~/.config/chromium/DevToolsActivePort`, reloads only the extension loaded from this checkout's `extension/dist`, and refreshes open YouTube watch tabs so their content scripts reconnect. Settings and Keep choices survive the reload. Reopen the side panel if Chromium closes it during reload.
+
+Use `npm --prefix extension run reload` after an existing build. Set `CHROMIUM_USER_DATA_DIR` for a different Chromium profile directory, or `CHROMIUM_CDP_URL` for an explicit HTTP or WebSocket debugging endpoint. If Chromium loaded the extension from another checkout, the command reports that directory instead of reloading an unrelated build.
+
+For repeated edits, run `npm --prefix extension run reload:watch` once and leave it running, then build normally with `make extension`. The watcher keeps one debugging connection open and reloads after each completed build, avoiding a new Chromium connection prompt on every build. Chromium may still request permission when a new debugging session starts.
+
 No Docker, database server, video download, or FFmpeg installation is required for the initial transcript-only path.
 
 Analysis cost describes the successful requests that produced the displayed scores, including prior requests reused from cache. It is not a new charge whenever the panel opens. Failed-request charges, if any, are not measurable from successful-response token usage; check the provider's billing for the final amount.
@@ -149,7 +163,7 @@ Keep this suspected interval outside the classifier input. It is a reference for
 
 ## Later stages
 
-- Automatically skip approved intervals during playback, with replay and keep controls.
+- Add replay controls for automatically skipped intervals.
 - Check visual relevance independently of speech so silent demonstrations survive.
 - Sample scene changes and periodic frames, increasing density around uncertain passages.
 - Use Jev `noul` questions for visual presence and relevance, and optional `box` questions to locate supporting evidence.
