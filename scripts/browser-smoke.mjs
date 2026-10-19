@@ -15,6 +15,7 @@ const extensionPath = path.join(root, 'extension/dist');
 const profile = await mkdtemp(path.join(tmpdir(), 'jev-browser-smoke-'));
 const videoId = 'MgvwZaDPCs4';
 const secondVideoId = 'AbCdEfGhI12';
+const fixtureDescription = `Full creator description.\n\n${'Useful tutorial details. '.repeat(80)}\nhttps://example.com/original-link`;
 // Tiny seekable H.264 fixture: black 16x16 frames with a real duration of 551s.
 // Native media properties are shared with Chrome's isolated content-script world;
 // overriding video.duration in the page world would not exercise the extension.
@@ -37,12 +38,12 @@ const html = `<!doctype html><html><head><title>[OFFLINE FIXTURE] Synthetic tuto
 <style>body{font-family:system-ui;background:#121212;color:#eee;margin:40px}#movie_player{position:relative;width:900px;height:420px;background:#242424}.ytp-progress-bar-container{position:absolute;bottom:0;width:100%;height:6px;background:#666}video{width:100%;height:100%}</style>
 </head><body><h2>Offline browser integration fixture — no real video or Jev requests</h2>
 <ytd-watch-metadata><h1><yt-formatted-string>[OFFLINE FIXTURE] Synthetic tutorial</yt-formatted-string></h1></ytd-watch-metadata>
-<div id="description-inline-expander">Synthetic fixture for testing the extension.</div>
+<div id="description-inline-expander"><div id="expanded"><yt-attributed-string></yt-attributed-string></div><div id="snippet"><yt-attributed-string id="attributed-snippet-text">Full creator description...</yt-attributed-string><button>...more</button></div><button id="expand">...more</button><section hidden>Subtitles and auto-dubbing<br>Show transcript<br>Channel name<br>Video details</section><button hidden>Show less</button></div>
 <div id="movie_player"><video src="/__fixture.mp4" preload="auto"></video><div class="ytp-progress-bar-container"></div></div>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">0:00</span><span class="segment-text">Useful tutorial introduction.</span></ytd-transcript-segment-renderer>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">4:08</span><span class="segment-text">Synthetic promotion with no useful information.</span></ytd-transcript-segment-renderer>
 <ytd-transcript-segment-renderer><span class="segment-timestamp">4:34</span><span class="segment-text">Useful explanation inside a synthetic promotion.</span></ytd-transcript-segment-renderer>
-<script>window.fixtureSeeks=[];document.querySelector('video').addEventListener('seeking',()=>window.fixtureSeeks.push(document.querySelector('video').currentTime));</script>
+<script>window.ytInitialPlayerResponse=${JSON.stringify({ videoDetails: { videoId, shortDescription: fixtureDescription } })};document.querySelector('#movie_player').getPlayerResponse=()=>window.ytInitialPlayerResponse;window.fixtureSeeks=[];document.querySelector('video').addEventListener('seeking',()=>window.fixtureSeeks.push(document.querySelector('video').currentTime));</script>
 </body></html>`;
 
 let context;
@@ -138,19 +139,20 @@ try {
   // Panel interaction selectors below intentionally use the visible accessible UI.
   await panel.getByRole('button', { name: /^Analyze/ }).waitFor({ state: 'visible' });
   const subject = panel.getByRole('textbox', { name: 'Video subject', exact: true });
-  const description = 'Synthetic fixture for testing the extension.';
+  const description = fixtureDescription;
   const defaultSubject = `${analysis.title}\n\n${description}`;
   await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
-  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'Updated description.'; });
+  await youtube.evaluate(() => { window.ytInitialPlayerResponse.videoDetails.shortDescription = 'Updated description.'; });
   await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
     `${analysis.title}\n\nUpdated description.`);
-  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'x'.repeat(2000); });
+  await youtube.evaluate(() => { window.ytInitialPlayerResponse.videoDetails.shortDescription = 'x'.repeat(2000); });
   await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected,
-    `${analysis.title}\n\n${'x'.repeat(2000)}`.slice(0, 1000));
-  await youtube.evaluate(text => { document.querySelector('#description-inline-expander').textContent = text; }, description);
+    `${analysis.title}\n\n${'x'.repeat(2000)}`);
+  await youtube.evaluate(text => { window.ytInitialPlayerResponse.videoDetails.shortDescription = text; }, description);
   await panel.waitForFunction(expected => document.querySelector('#subject')?.value === expected, defaultSubject);
   await subject.fill('Custom tutorial focus');
-  await youtube.evaluate(() => { document.querySelector('#description-inline-expander').textContent = 'Description after editing.'; });
+  const freshDescription = `Description after editing.\n\n${'Full text. '.repeat(150)}\nhttps://example.com/end`;
+  await youtube.evaluate(text => { window.ytInitialPlayerResponse.videoDetails.shortDescription = text; }, freshDescription);
   // Wait for metadata polling to observe the new description before checking the edit.
   await panel.waitForTimeout(2200);
   assert.equal(await subject.inputValue(), 'Custom tutorial focus', 'metadata updates preserve manual subject edits');
@@ -162,7 +164,7 @@ try {
   assert.equal(requests.length, 1, 'one explicit analysis request');
   assert.equal(requests[0].video_id, videoId);
   assert.equal(requests[0].subject, 'Custom tutorial focus', 'edited subject reaches the helper');
-  assert.equal(requests[0].description, 'Description after editing.', 'fresh description reaches the helper');
+  assert.equal(requests[0].description, freshDescription, 'full fresh description reaches the helper');
   assert.ok(requests[0].transcript?.length, 'visible YouTube transcript reaches helper');
   assert.ok(requests[0].transcript.every(cue => cue.duration > 0 && cue.duration <= 120), 'DOM cue timestamps satisfy helper contract');
   await panel.getByRole('status').getByText(/1 \/ 4 passages/).waitFor();

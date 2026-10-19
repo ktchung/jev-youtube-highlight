@@ -27,6 +27,28 @@ describe('YouTube metadata extraction', () => {
     document.body.innerHTML = '<ytd-watch-flexy video-id="dQw4w9WgXcQ"></ytd-watch-flexy>';
     expect(readMetadata(document, url)).toBe(null);
   });
+  it('reads only the creator text from the collapsed description', () => {
+    document.body.innerHTML = `<div id="description-inline-expander">
+      <div id="expanded"><yt-attributed-string></yt-attributed-string></div>
+      <div id="snippet"><yt-attributed-string id="attributed-snippet-text">Creator text with a <a>link</a>.</yt-attributed-string><button>...more</button></div>
+      <button id="expand">...more</button>
+      <div hidden>Subtitles and auto-dubbing<br>Show transcript<br>Channel name<br>Video details</div>
+      <button id="collapse" hidden>Show less</button>
+    </div>`;
+    expect(readMetadata(document, url)?.description).toBe('Creator text with a link.');
+  });
+  it('prefers expanded creator text without duplicating the collapsed snippet', () => {
+    document.body.innerHTML = `<div id="description-inline-expander">
+      <div id="expanded"><yt-attributed-string>Full creator description.\nSecond paragraph.</yt-attributed-string></div>
+      <yt-attributed-string id="attributed-snippet-text">Full creator...</yt-attributed-string>
+      <button>Show less</button>
+    </div>`;
+    expect(readMetadata(document, url)?.description).toBe('Full creator description.\nSecond paragraph.');
+  });
+  it('does not substitute channel cards when the creator description is missing', () => {
+    document.body.innerHTML = '<div id="description"><div id="description-inline-expander"><button>...more</button><div><yt-attributed-string>Channel name</yt-attributed-string></div></div></div>';
+    expect(readMetadata(document, url)?.description).toBe('');
+  });
   it('does not assign long silence to speech or accept duplicate/out-of-bounds cues', () => {
     document.body.innerHTML = '<video></video>' + [
       ['0:01', 'First'], ['0:01', 'duplicate'], ['4:08', 'Second'], ['9:30', 'out of bounds'],

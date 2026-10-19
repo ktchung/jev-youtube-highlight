@@ -37,7 +37,7 @@ class AnalysisRequest(BaseModel):
     title: str = Field(min_length=1, max_length=1000)
     description: str = Field(default="", max_length=12_000)
     duration: Annotated[float, Field(gt=0, le=14_400, allow_inf_nan=False)] | None = None
-    subject: str | None = Field(default=None, max_length=1000)
+    subject: str | None = Field(default=None, max_length=13_002)
     transcript: list[TranscriptCue] | None = Field(default=None, min_length=1, max_length=10_000)
     force: bool = Field(
         default=False,

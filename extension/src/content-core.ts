@@ -1,4 +1,5 @@
 import type { TranscriptCue, VideoMetadata } from './types';
+import { readDescription } from './description';
 
 export function videoIdFromUrl(url: string): string | null {
   try {
@@ -41,7 +42,7 @@ export function readMetadata(doc: Document = document, url: string = location.hr
   return {
     video_id: videoId,
     title,
-    description: text('#description-inline-expander') || text('#description yt-attributed-string'),
+    description: readDescription(doc, videoId),
     duration,
     ...(transcript.length ? { transcript } : {}),
   };

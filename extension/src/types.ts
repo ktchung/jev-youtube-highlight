@@ -12,6 +12,9 @@ export interface VideoMetadata {
   transcript?: TranscriptCue[];
 }
 
+// The helper accepts a 1,000-character title and a 12,000-character description.
+export const SUBJECT_MAX_LENGTH = 13_002;
+
 export interface Segment {
   id: string;
   start: number;

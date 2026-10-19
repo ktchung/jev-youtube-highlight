@@ -3,6 +3,14 @@ import json
 import httpx
 import pytest
 from conftest import EXTENSION_ORIGIN, VIDEO_ID, jev_response, wait_for_job
+from jev_helper.models import AnalysisRequest
+
+
+def test_subject_accepts_the_full_title_and_description(payload):
+    payload["title"] = "t" * 1000
+    payload["description"] = "d" * 12_000
+    payload["subject"] = payload["title"] + "\n\n" + payload["description"]
+    assert AnalysisRequest.model_validate(payload).subject == payload["subject"]
 
 
 def test_analysis_cache_and_private_key(client_factory, payload, settings):
